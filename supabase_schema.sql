@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS game_sessions (
   -- Player Information
   player_name VARCHAR(255) NOT NULL,
   avatar_url TEXT,
+  gemini_api_key TEXT, -- Store API key (encrypted in production!)
   
   -- Score tracking
   total_score INTEGER DEFAULT 0,
