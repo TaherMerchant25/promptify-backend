@@ -14,20 +14,25 @@ const httpServer = createServer(app);
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 const PORT = process.env.PORT || 3001;
 
-// Middleware
+// Middleware - Allow all origins for hackathon
 app.use(cors({
-  origin: FRONTEND_URL,
-  methods: ["GET", "POST", "PUT"],
+  origin: "*",
+  methods: ["GET", "POST", "PUT", "OPTIONS"],
   credentials: true
 }));
 app.use(express.json());
 
-// Socket.io setup
+// Socket.io setup - configured for Cloud Run
 const io = new Server(httpServer, {
   cors: {
     origin: "*",
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ['websocket', 'polling'],
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 // -- Game State --
