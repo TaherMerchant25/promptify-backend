@@ -1,76 +1,85 @@
--- Supabase SQL Schema for Promptify Game Sessions
--- Run this in your Supabase SQL Editor to create the table
+-- Supabase SQL Schema for Promptify - Full Game Data Storage
+-- Run this in your Supabase SQL Editor
 
--- Create the game_sessions table
+-- Drop existing table if you want to start fresh (CAREFUL - this deletes data!)
+-- DROP TABLE IF EXISTS game_sessions;
+
+-- Create the game_sessions table with full game data
 CREATE TABLE IF NOT EXISTS game_sessions (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   
   -- Player Information
   player_name VARCHAR(255) NOT NULL,
-  api_key_hash VARCHAR(64), -- Store a hash of API key for security (optional)
+  avatar_url TEXT,
   
-  -- Timing Information (in milliseconds)
+  -- Score tracking
+  total_score INTEGER DEFAULT 0,
+  rounds_completed INTEGER DEFAULT 0,
+  current_round INTEGER DEFAULT 1,
+  
+  -- Individual round scores
+  round1_score INTEGER,
+  round2_score INTEGER,
+  round3_score INTEGER,
+  
+  -- Time tracking (in milliseconds)
   round1_time INTEGER,
   round2_time INTEGER,
   round3_time INTEGER,
   total_time INTEGER,
   
-  -- Round 1 Data (4 sub-rounds)
-  round1_prompts JSONB DEFAULT '[]'::jsonb,
-  round1_outputs JSONB DEFAULT '[]'::jsonb,
-  round1_scores JSONB DEFAULT '[]'::jsonb,
+  -- Round 1 Data (prompts, outputs for each sub-round)
+  round1_data JSONB DEFAULT '[]'::jsonb,
+  -- Format: [{ subRoundId: "1a", targetPhrase: "...", prompt: "...", output: "...", score: 100, timeTaken: 5000 }, ...]
   
   -- Round 2 Data
-  round2_prompts JSONB DEFAULT '[]'::jsonb,
-  round2_outputs JSONB DEFAULT '[]'::jsonb,
-  round2_score INTEGER DEFAULT 0,
+  round2_data JSONB DEFAULT '[]'::jsonb,
+  -- Format: [{ prompt: "...", output: "...", targetContent: "...", score: 85, timeTaken: 8000 }]
   
-  -- Round 3 Data
-  round3_prompts JSONB DEFAULT '[]'::jsonb,
-  round3_outputs JSONB DEFAULT '[]'::jsonb,
-  round3_score INTEGER DEFAULT 0,
+  -- Round 3 Data  
+  round3_data JSONB DEFAULT '[]'::jsonb,
+  -- Format: [{ prompt: "...", output: "...", targetContent: "...", score: 90, timeTaken: 6000 }]
   
-  -- Final Results
-  total_score INTEGER DEFAULT 0,
-  completed BOOLEAN DEFAULT false,
+  -- Status for display
+  status VARCHAR(50) DEFAULT 'Playing',
   
   -- Timestamps
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Create an index on player_name for faster lookups
-CREATE INDEX IF NOT EXISTS idx_game_sessions_player_name ON game_sessions(player_name);
-
--- Create an index on total_score for leaderboard queries
+-- Create indexes for faster queries
 CREATE INDEX IF NOT EXISTS idx_game_sessions_total_score ON game_sessions(total_score DESC);
+CREATE INDEX IF NOT EXISTS idx_game_sessions_updated_at ON game_sessions(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_game_sessions_player_name ON game_sessions(player_name);
+CREATE INDEX IF NOT EXISTS idx_game_sessions_status ON game_sessions(status);
 
--- Create an index on created_at for recent games
-CREATE INDEX IF NOT EXISTS idx_game_sessions_created_at ON game_sessions(created_at DESC);
-
--- Enable Row Level Security (optional but recommended)
+-- Enable Row Level Security
 ALTER TABLE game_sessions ENABLE ROW LEVEL SECURITY;
 
--- Create a policy to allow inserts from anonymous users
-CREATE POLICY "Allow anonymous inserts" ON game_sessions
-  FOR INSERT
-  TO anon
-  WITH CHECK (true);
-
--- Create a policy to allow reads from anonymous users (for leaderboard)
-CREATE POLICY "Allow anonymous reads" ON game_sessions
-  FOR SELECT
-  TO anon
+-- Allow anyone to read (for leaderboard)
+DROP POLICY IF EXISTS "Allow public read" ON game_sessions;
+CREATE POLICY "Allow public read" ON game_sessions
+  FOR SELECT TO anon, authenticated
   USING (true);
 
--- Create a policy to allow updates from anonymous users (for updating their own session)
-CREATE POLICY "Allow anonymous updates" ON game_sessions
-  FOR UPDATE
-  TO anon
+-- Allow anyone to insert (create new sessions)
+DROP POLICY IF EXISTS "Allow public insert" ON game_sessions;
+CREATE POLICY "Allow public insert" ON game_sessions
+  FOR INSERT TO anon, authenticated
+  WITH CHECK (true);
+
+-- Allow anyone to update (update their session)
+DROP POLICY IF EXISTS "Allow public update" ON game_sessions;
+CREATE POLICY "Allow public update" ON game_sessions
+  FOR UPDATE TO anon, authenticated
   USING (true)
   WITH CHECK (true);
 
--- Function to automatically update updated_at timestamp
+-- Enable Realtime for this table (for live leaderboard updates in frontend)
+ALTER PUBLICATION supabase_realtime ADD TABLE game_sessions;
+
+-- Auto-update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -79,16 +88,8 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Trigger to auto-update updated_at
 DROP TRIGGER IF EXISTS update_game_sessions_updated_at ON game_sessions;
 CREATE TRIGGER update_game_sessions_updated_at
   BEFORE UPDATE ON game_sessions
   FOR EACH ROW
   EXECUTE FUNCTION update_updated_at_column();
-
--- Sample query to get leaderboard (top 10 completed games)
--- SELECT player_name, total_score, total_time, created_at 
--- FROM game_sessions 
--- WHERE completed = true 
--- ORDER BY total_score DESC, total_time ASC 
--- LIMIT 10;

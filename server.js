@@ -1,5 +1,3 @@
-import { Server } from "socket.io";
-import { createServer } from "http";
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -9,44 +7,15 @@ import { isSupabaseConfigured } from "./config/supabase.js";
 dotenv.config();
 
 const app = express();
-const httpServer = createServer(app);
-
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 const PORT = process.env.PORT || 3001;
 
 // Middleware - Allow all origins for hackathon
 app.use(cors({
   origin: "*",
-  methods: ["GET", "POST", "PUT", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true
 }));
 app.use(express.json());
-
-// Socket.io setup - configured for Cloud Run
-const io = new Server(httpServer, {
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-    credentials: true
-  },
-  transports: ['websocket', 'polling'],
-  allowEIO3: true,
-  pingTimeout: 60000,
-  pingInterval: 25000
-});
-
-// -- Game State --
-const socketPlayers = new Map();
-const persistentPlayers = new Map();
-const playerSessions = new Map(); // Map player username to Supabase session ID
-
-function broadcastLeaderboard() {
-  const allPlayers = Array.from(persistentPlayers.values())
-    .sort((a, b) => b.score - a.score)
-    .map((p, index) => ({ ...p, rank: index + 1 }));
-  
-  io.emit("leaderboard_update", allPlayers);
-}
 
 // -- REST API Routes --
 
@@ -59,65 +28,41 @@ app.get("/health", (req, res) => {
   });
 });
 
+// Root route
+app.get("/", (req, res) => {
+  res.json({ 
+    message: "Promptify Backend API",
+    version: "2.0.0",
+    endpoints: {
+      health: "GET /health",
+      createSession: "POST /api/sessions",
+      getSession: "GET /api/sessions/:sessionId",
+      updateSession: "PUT /api/sessions/:sessionId",
+      saveRound1: "PUT /api/sessions/:sessionId/round1",
+      saveRound2: "PUT /api/sessions/:sessionId/round2",
+      saveRound3: "PUT /api/sessions/:sessionId/round3",
+      leaderboard: "GET /api/leaderboard",
+      playerHistory: "GET /api/players/:playerName/sessions"
+    }
+  });
+});
+
+// ===== SESSION ENDPOINTS =====
+
 // Create a new game session
 app.post("/api/sessions", async (req, res) => {
   try {
-    const { playerName, apiKey } = req.body;
+    const { playerName, avatarUrl } = req.body;
     
     if (!playerName) {
       return res.status(400).json({ error: "Player name is required" });
     }
 
-    const session = await gameSessionService.createSession(playerName, apiKey);
+    const session = await gameSessionService.createSession(playerName, avatarUrl);
     res.json({ success: true, session });
   } catch (error) {
     console.error("Error creating session:", error);
     res.status(500).json({ error: "Failed to create session" });
-  }
-});
-
-// Update round data
-app.put("/api/sessions/:sessionId/rounds/:roundNumber", async (req, res) => {
-  try {
-    const { sessionId, roundNumber } = req.params;
-    const roundData = req.body;
-
-    const result = await gameSessionService.updateRoundData(
-      sessionId, 
-      parseInt(roundNumber), 
-      roundData
-    );
-
-    res.json({ success: true, data: result });
-  } catch (error) {
-    console.error("Error updating round:", error);
-    res.status(500).json({ error: "Failed to update round data" });
-  }
-});
-
-// Complete a session
-app.put("/api/sessions/:sessionId/complete", async (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    const finalData = req.body;
-
-    const result = await gameSessionService.completeSession(sessionId, finalData);
-    res.json({ success: true, data: result });
-  } catch (error) {
-    console.error("Error completing session:", error);
-    res.status(500).json({ error: "Failed to complete session" });
-  }
-});
-
-// Get leaderboard from database
-app.get("/api/leaderboard", async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit) || 10;
-    const leaderboard = await gameSessionService.getLeaderboard(limit);
-    res.json({ success: true, leaderboard });
-  } catch (error) {
-    console.error("Error fetching leaderboard:", error);
-    res.status(500).json({ error: "Failed to fetch leaderboard" });
   }
 });
 
@@ -138,11 +83,106 @@ app.get("/api/sessions/:sessionId", async (req, res) => {
   }
 });
 
+// Update session (generic update)
+app.put("/api/sessions/:sessionId", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const updates = req.body;
+
+    const result = await gameSessionService.updateSession(sessionId, updates);
+    res.json({ success: true, session: result });
+  } catch (error) {
+    console.error("Error updating session:", error);
+    res.status(500).json({ error: "Failed to update session" });
+  }
+});
+
+// ===== ROUND DATA ENDPOINTS =====
+
+// Save Round 1 data (sub-rounds with prompts and outputs)
+app.put("/api/sessions/:sessionId/round1", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { subRoundsData, totalScore, totalTime } = req.body;
+
+    const result = await gameSessionService.saveRound1Data(
+      sessionId, 
+      subRoundsData, 
+      totalScore, 
+      totalTime
+    );
+    
+    res.json({ success: result, message: result ? "Round 1 saved" : "Failed to save" });
+  } catch (error) {
+    console.error("Error saving round 1:", error);
+    res.status(500).json({ error: "Failed to save round 1 data" });
+  }
+});
+
+// Save Round 2 data
+app.put("/api/sessions/:sessionId/round2", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { roundData, roundScore, roundTime, previousTotalScore } = req.body;
+
+    const result = await gameSessionService.saveRound2Data(
+      sessionId, 
+      roundData, 
+      roundScore, 
+      roundTime, 
+      previousTotalScore
+    );
+    
+    res.json({ success: result, message: result ? "Round 2 saved" : "Failed to save" });
+  } catch (error) {
+    console.error("Error saving round 2:", error);
+    res.status(500).json({ error: "Failed to save round 2 data" });
+  }
+});
+
+// Save Round 3 data and complete game
+app.put("/api/sessions/:sessionId/round3", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { roundData, roundScore, roundTime, previousTotalScore, totalGameTime } = req.body;
+
+    const result = await gameSessionService.saveRound3Data(
+      sessionId, 
+      roundData, 
+      roundScore, 
+      roundTime, 
+      previousTotalScore,
+      totalGameTime
+    );
+    
+    res.json({ success: result, message: result ? "Round 3 saved, game complete!" : "Failed to save" });
+  } catch (error) {
+    console.error("Error saving round 3:", error);
+    res.status(500).json({ error: "Failed to save round 3 data" });
+  }
+});
+
+// ===== LEADERBOARD ENDPOINTS =====
+
+// Get leaderboard from Supabase
+app.get("/api/leaderboard", async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+    const leaderboard = await gameSessionService.getLeaderboard(limit);
+    res.json({ success: true, leaderboard });
+  } catch (error) {
+    console.error("Error fetching leaderboard:", error);
+    res.status(500).json({ error: "Failed to fetch leaderboard" });
+  }
+});
+
+// ===== PLAYER ENDPOINTS =====
+
 // Get player history
 app.get("/api/players/:playerName/sessions", async (req, res) => {
   try {
     const { playerName } = req.params;
-    const sessions = await gameSessionService.getPlayerSessions(playerName);
+    const sessions = await gameSessionService.getPlayerHistory(playerName);
     res.json({ success: true, sessions });
   } catch (error) {
     console.error("Error fetching player sessions:", error);
@@ -150,107 +190,52 @@ app.get("/api/players/:playerName/sessions", async (req, res) => {
   }
 });
 
-// -- Socket Events --
-io.on("connection", (socket) => {
-  console.log(`🔌 New client connected: ${socket.id}`);
+// ===== ADMIN/ANALYTICS ENDPOINTS =====
 
-  broadcastLeaderboard();
+// Get all sessions (for admin/analytics)
+app.get("/api/admin/sessions", async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 100;
+    const sessions = await gameSessionService.getAllSessions(limit);
+    res.json({ success: true, sessions, count: sessions.length });
+  } catch (error) {
+    console.error("Error fetching all sessions:", error);
+    res.status(500).json({ error: "Failed to fetch sessions" });
+  }
+});
 
-  socket.on("join", async (userData) => {
-    const playerKey = userData.username;
-    
-    let player = persistentPlayers.get(playerKey) || {
-      username: userData.username,
-      avatarUrl: userData.avatarUrl,
-      score: 0,
-      status: "Just Joined",
-      isBot: false
-    };
-    
-    if (userData.avatarUrl) {
-      player.avatarUrl = userData.avatarUrl;
-    }
-    
-    persistentPlayers.set(playerKey, player);
-    socketPlayers.set(socket.id, playerKey);
-
-    // Create a Supabase session for this player
-    if (!playerSessions.has(playerKey)) {
-      const session = await gameSessionService.createSession(
-        userData.username, 
-        userData.apiKey
-      );
-      playerSessions.set(playerKey, session.id);
-      socket.emit("session_created", { sessionId: session.id });
-    } else {
-      socket.emit("session_created", { sessionId: playerSessions.get(playerKey) });
-    }
-    
-    console.log(`👤 Player joined: ${userData.username}`);
-    broadcastLeaderboard();
-  });
-
-  socket.on("update_progress", (data) => {
-    const playerKey = socketPlayers.get(socket.id);
-    if (playerKey) {
-      const player = persistentPlayers.get(playerKey);
-      if (player) {
-        persistentPlayers.set(playerKey, { ...player, ...data });
-        broadcastLeaderboard();
-      }
-    }
-  });
-
-  // Handle round completion - save to Supabase
-  socket.on("round_complete", async (data) => {
-    const playerKey = socketPlayers.get(socket.id);
-    if (playerKey) {
-      const sessionId = playerSessions.get(playerKey);
-      if (sessionId) {
-        await gameSessionService.updateRoundData(sessionId, data.roundNumber, {
-          prompts: data.prompts,
-          outputs: data.outputs,
-          scores: data.scores,
-          score: data.score,
-          timeTaken: data.timeTaken
-        });
-        console.log(`💾 Saved round ${data.roundNumber} data for ${playerKey}`);
-      }
-    }
-  });
-
-  // Handle game completion - finalize in Supabase
-  socket.on("game_complete", async (data) => {
-    const playerKey = socketPlayers.get(socket.id);
-    if (playerKey) {
-      const sessionId = playerSessions.get(playerKey);
-      if (sessionId) {
-        await gameSessionService.completeSession(sessionId, {
-          totalScore: data.totalScore,
-          totalTime: data.totalTime
-        });
-        console.log(`🏆 Game completed for ${playerKey} with score ${data.totalScore}`);
-      }
-    }
-  });
-
-  socket.on("disconnect", () => {
-    const playerKey = socketPlayers.get(socket.id);
-    if (playerKey) {
-      console.log(`👋 Player disconnected: ${playerKey}`);
-      socketPlayers.delete(socket.id);
-    }
-  });
+// Get statistics
+app.get("/api/admin/stats", async (req, res) => {
+  try {
+    const stats = await gameSessionService.getStats();
+    res.json({ success: true, stats });
+  } catch (error) {
+    console.error("Error fetching stats:", error);
+    res.status(500).json({ error: "Failed to fetch stats" });
+  }
 });
 
 // Start server
-httpServer.listen(PORT, () => {
+app.listen(PORT, () => {
   console.log(`
 ╔══════════════════════════════════════════════════════════╗
-║           🎮 Promptify Backend Server                    ║
+║           🎮 Promptify Backend API Server                ║
 ╠══════════════════════════════════════════════════════════╣
 ║  Server:    http://localhost:${PORT}                        ║
 ║  Supabase:  ${isSupabaseConfigured() ? '✅ Connected' : '⚠️  Not configured (check .env)'}               ║
+╠══════════════════════════════════════════════════════════╣
+║  Endpoints:                                              ║
+║    POST   /api/sessions          - Create session        ║
+║    GET    /api/sessions/:id      - Get session           ║
+║    PUT    /api/sessions/:id      - Update session        ║
+║    PUT    /api/sessions/:id/round1 - Save round 1        ║
+║    PUT    /api/sessions/:id/round2 - Save round 2        ║
+║    PUT    /api/sessions/:id/round3 - Save round 3        ║
+║    GET    /api/leaderboard       - Get leaderboard       ║
+║    GET    /api/players/:name/sessions - Player history   ║
+╚══════════════════════════════════════════════════════════╝
+  `);
+});
 ║  Frontend:  ${FRONTEND_URL}                     ║
 ╚══════════════════════════════════════════════════════════╝
   `);
